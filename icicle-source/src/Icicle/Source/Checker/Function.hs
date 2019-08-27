@@ -49,10 +49,10 @@ checkFs env functions
     else pure (env0 <> [ResolvedFunction (snd name) funtype annotfun], logs0 <> [logs'])
 
 checkF  :: (Hashable n, Eq n, Pretty n)
-        => Map.Map (Name n) (FunctionType n)
+        => Map.Map (Name n) (Type n)
         -> Function a n
         -> EitherT (CheckError a n) (Fresh.Fresh n)
-                   ((Function (Annot a n) n, FunctionType n), [CheckLog a n])
+                   ((Function (Annot a n) n, Type n), [CheckLog a n])
 
 checkF env fun
  = evalGen $ checkF' fun env
@@ -62,7 +62,7 @@ checkF env fun
 checkF' :: (Hashable n, Eq n, Pretty n)
         => Function a n
         -> GenEnv n
-        -> Gen a n (Function (Annot a n) n, FunctionType n)
+        -> Gen a n (Function (Annot a n) n, Type n)
 
 checkF' fun env
  = do -- Give each argument a fresh type variable
@@ -147,8 +147,13 @@ checkF' fun env
                 $ Set.unions
                 $ keepModes : freeT resT : fmap freeT argTs
 
+      let arrT  = foldr TypeArrow resT argTs
+
       -- Put it all together
-      let funT  = FunctionType binds constrs argTs resT
+      let funT  | null binds && null constrs
+                = arrT
+                | otherwise
+                = TypeForall binds constrs arrT
 
       return (Function args q, funT)
  where
@@ -162,7 +167,7 @@ checkF' fun env
    <*>                  (TypeVar <$> fresh))
 
   lookupArg subs e (a,n)
-   = do (_,_,t,_) <- lookup a n e
+   = do (_, t,_) <- lookup a n e
         return (Annot a (substT subs t) [], n)
 
   dischargeInfo q cons subs =

@@ -95,7 +95,7 @@ convertPrim p ann resT xts = go p
         return $ primmin $ Min.PrimConst $ Min.PrimConstLeft a' b'
    | otherwise
    = convertError
-   $ ConvertErrorPrimNoArguments ann 2 p
+   $ ConvertErrorPrimNoArguments ann 1 p
   go (PrimCon ConRight)
    | (_, _, SumT a b) <- decomposeT resT
    = do a' <- convertValType ann a
@@ -103,7 +103,7 @@ convertPrim p ann resT xts = go p
         return $ primmin $ Min.PrimConst $ Min.PrimConstRight a' b'
    | otherwise
    = convertError
-   $ ConvertErrorPrimNoArguments ann 2 p
+   $ ConvertErrorPrimNoArguments ann 1 p
   go (PrimCon (ConError err))
    = return $ CE.XValue () T.ErrorT $ V.VError err
 
@@ -252,8 +252,9 @@ convertPrim p ann resT xts = go p
    = return $ primmin $ Min.PrimTime Min.PrimTimeProjectMonth
   gotime ProjectYear
    = return $ primmin $ Min.PrimTime Min.PrimTimeProjectYear
+
   -- This looks pointless, but actually isn't. Reify possibilities takes care of sequencing both
-  -- of the possiblities of this function, so although we don't check that the first tuple is
+  -- of the possibilities of this function, so although we don't check that the first tuple is
   -- not a tombstone here, it is now assured to not be.
   godata Seq
    | [_,(xb,_)] <- xts

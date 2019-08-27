@@ -3,22 +3,26 @@
 --
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE PatternGuards #-}
+{-# LANGUAGE PatternGuards     #-}
+{-# LANGUAGE LambdaCase        #-}
+{-# LANGUAGE TupleSections     #-}
 module Icicle.Source.Type.Subst (
     SubstT
   , substT
   , substC
-  , substFT
   , compose
   , unifyT
   ) where
 
 
 import                  Icicle.Common.Base
+
 import                  Icicle.Source.Type.Base
 import                  Icicle.Source.Type.Compounds
 
 import                  P
+
+import                  Control.Lens (over)
 
 import qualified        Data.Map as Map
 import qualified        Data.Set as Set
@@ -26,85 +30,27 @@ import                  Data.Hashable (Hashable)
 
 type SubstT n = Map.Map (Name n) (Type n)
 
+
+--- | Substitute into a type.
 substT :: Eq n => SubstT n -> Type n -> Type n
-substT ss tt
- = canonT
- $ go tt
+substT ss
+ = canonT . go ss
  where
-
-  go t
-   = case t of
-      BoolT         -> t
-      TimeT         -> t
-      DoubleT       -> t
-      IntT          -> t
-      StringT       -> t
-      UnitT         -> t
-      ErrorT        -> t
-
-      ArrayT  a     -> ArrayT  (go a)
-      GroupT  a b   -> GroupT  (go a) (go b)
-      OptionT a     -> OptionT (go a)
-      PairT   a b   -> PairT   (go a) (go b)
-      SumT    a b   -> SumT    (go a) (go b)
-      StructT fs    -> StructT (Map.map go fs)
-
-      Temporality a b       -> Temporality (go a) (go b)
-      TemporalityPure       -> t
-      TemporalityElement    -> t
-      TemporalityAggregate  -> t
-
-      Possibility a b       -> Possibility (go a) (go b)
-      PossibilityPossibly   -> t
-      PossibilityDefinitely -> t
-
-      TypeVar n
-       | Just t' <- Map.lookup n ss
-       -> t'
-       | otherwise
-       -> t
-
+  go ss0 = \case
+    TypeVar n
+      | Just t' <- Map.lookup n ss
+      -> t'
+    TypeForall ns cs r
+      -> let ss1  = ss Map.\\ Map.fromList ((,()) <$> ns)
+             cs1  = fmap (substC ss1) cs
+             r1   = go ss1 r
+         in  TypeForall ns cs1 r1
+    t
+      -> mapSourceType (go ss0) t
 
 substC :: Eq n => SubstT n -> Constraint n -> Constraint n
-substC ss cc
- = case cc of
-    CEquals p q
-     -> CEquals (substT ss p) (substT ss q)
-    CIsNum t
-     -> CIsNum (substT ss t)
-    CPossibilityOfNum p t
-     -> CPossibilityOfNum (substT ss p) (substT ss t)
-    CTemporalityJoin a b c
-     -> CTemporalityJoin (substT ss a) (substT ss b) (substT ss c)
-    CReturnOfLetTemporalities ret def body
-     -> CReturnOfLetTemporalities (substT ss ret) (substT ss def) (substT ss body)
-    CDataOfLatest ret tmp pos dat
-     -> CDataOfLatest (substT ss ret) (substT ss tmp) (substT ss pos) (substT ss dat)
-    CPossibilityOfLatest ret tmp pos
-     -> CPossibilityOfLatest (substT ss ret) (substT ss tmp) (substT ss pos)
-    CPossibilityJoin ret b c
-     -> CPossibilityJoin (substT ss ret) (substT ss b) (substT ss c)
-
-
--- | Substitute into a function type.
--- It is very important that any binders (foralls) in here are unique.
--- If the binders mention any names in the substitution, things WILL go awry.
--- This is not a problem for type checking since all names are fresh.
---
--- Because the function constraints will only mention newly bound type variables,
--- it is not necessary to substitute into the constraints.
---
--- Perhaps this should actually be called "unsafeSubstFT" because none of these
--- invariants are checked.
-substFT :: Eq n => SubstT n -> FunctionType n -> FunctionType n
-substFT ss ff
- = ff
- { functionConstraints  = fmap (substC ss') (functionConstraints ff)
- , functionArguments    = fmap (substT ss') (functionArguments   ff)
- , functionReturn       =       substT ss'  (functionReturn      ff) }
- where
-  ss' = foldl (flip Map.delete) ss
-      $ functionForalls ff
+substC ss
+ = over traverseType (substT ss)
 
 
 -- | Compose two substitutions together, in order.
@@ -168,6 +114,7 @@ unifyT t1 t2
      -> Nothing
      | TypeVar b <- t2
      -> return $ Map.singleton b t1
+
 
     BoolT       -> eq
     TimeT       -> eq
@@ -235,10 +182,22 @@ unifyT t1 t2
     PossibilityPossibly     -> eq
     PossibilityDefinitely   -> eq
 
+    TypeForall n _ac at
+     | TypeForall m _bc bt <- t2
+     , n == m
+     -> unifyT at bt
+     | otherwise
+     -> Nothing
+
+    TypeArrow  at ar
+     | TypeArrow bt br <- t2
+     -> compose <$> unifyT at bt <*> unifyT ar br
+     | otherwise
+     -> Nothing
+
  where
   eq
    | t1 == t2
    = Just Map.empty
    | otherwise
    = Nothing
-

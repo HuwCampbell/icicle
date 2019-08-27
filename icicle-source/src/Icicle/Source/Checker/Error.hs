@@ -41,7 +41,7 @@ data ErrorInfo a n
  = ErrorNoSuchVariable a (Name n)
  | ErrorNoSuchInput a UnresolvedInputId
  | ErrorContextNotAllowedHere  a (Context a n)
- | ErrorFunctionWrongArgs      a (Exp a n) (FunctionType n) [Type n]
+ | ErrorFunctionWrongArgs      a (Exp a n) (Type n) [Type n]
  | ErrorApplicationNotFunction a (Exp a n)
  | ErrorConstraintsNotSatisfied a [(a, DischargeError n)]
  | ErrorConstraintLeftover      a [(a, Constraint n)]
@@ -91,7 +91,7 @@ annotOfError (CheckError e _)
 
 data ErrorSuggestion a n
  = AvailableFeatures UnresolvedInputId [(InputId, Type n)]
- | AvailableBindings (Name n) [(Name n, FunctionType n)]
+ | AvailableBindings (Name n) [(Name n, Type n)]
  | Suggest String
  deriving (Show, Eq, Generic)
 
@@ -176,7 +176,7 @@ instance (IsString n, Pretty a, Pretty n, Hashable n, Eq n) => Pretty (ErrorInfo
 
     ErrorReturnNotAggregate a t ->
       vsep [
-          "Return type is not an aggregate at" <+> pretty a
+          "Return type is not an aggregate value at" <+> pretty a
         , mempty
         , "Type: " <> inp t
         ]

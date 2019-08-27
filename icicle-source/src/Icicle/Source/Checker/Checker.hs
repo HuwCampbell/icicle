@@ -25,6 +25,7 @@ import qualified        Icicle.Common.Fresh     as Fresh
 
 import                  P
 
+
 import qualified        Data.Map as Map
 import                  Data.Hashable (Hashable)
 
@@ -45,9 +46,9 @@ checkQT opts features qt
   = case lookupInputId (queryInput qt) (featuresConcretes features) of
     Just (FeatureConcrete _ _ f)
      -> do  let env = Map.unions
-                      [ fmap function0 (envOfFeatureContext f)
+                      [ envOfFeatureContext f
                       , featuresFunctions features
-                      , fmap function0 (envOfFeatureNow opts (featureNow features)) ]
+                      , envOfFeatureNow opts (featureNow features) ]
             (q,t) <- checkQ opts (emptyCheckEnv { checkEnvironment = env }) (query qt)
             return (qt { query = q }, t)
 
@@ -81,8 +82,14 @@ checkQ opts ctx q
        _
          -> hoistEither
           $ errorSuggestions
-              (ErrorReturnNotAggregate (annotOfQuery $ q) t)
+              (ErrorReturnNotAggregate (annotOfQuery q) t)
               [Suggest "The return must be an aggregate, otherwise the result could be quite large"]
+
+      when (anyArrows t)
+        $ hoistEither
+        $ errorSuggestions
+            (ErrorReturnNotAggregate (annotOfQuery q) t)
+            [Suggest "The return must not contain functions or type abstractions"]
 
       hoistEither $ invariantQ ctx q
 
@@ -90,4 +97,3 @@ checkQ opts ctx q
         hoistEither $ checkResumableQ ctx q
 
       return (q', t)
-

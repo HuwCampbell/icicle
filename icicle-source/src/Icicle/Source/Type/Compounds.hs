@@ -4,8 +4,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternGuards #-}
 module Icicle.Source.Type.Compounds (
-    function0
-  , freeT
+    freeT
   , freeC
   , canonT
   , decomposeT
@@ -15,6 +14,8 @@ module Icicle.Source.Type.Compounds (
   , getPossibility
   , getTemporalityOrPure
   , getPossibilityOrDefinitely
+
+  , anyArrows
   ) where
 
 
@@ -25,13 +26,10 @@ import                  P
 
 import                  Data.List (zipWith, zip)
 import qualified        Data.Map as Map
+import                  Data.Monoid (Any (..))
 import qualified        Data.Set as Set
 import                  Data.Hashable (Hashable)
 
-
-function0 :: Type n -> FunctionType n
-function0 u
- = FunctionType [] [] [] u
 
 freeT :: (Hashable n, Eq n) => Type n -> Set.Set (Name n)
 freeT t
@@ -63,6 +61,8 @@ freeT t
     PossibilityDefinitely   -> Set.empty
 
     TypeVar n               -> Set.singleton n
+    TypeForall ns cs b      -> Set.difference (Set.union (Set.unions (fmap freeC cs)) (freeT b)) (Set.fromList ns)
+    TypeArrow f b           -> Set.union (freeT f) (freeT b)
 
 
 freeC :: (Hashable n, Eq n) => Constraint n -> Set.Set (Name n)
@@ -145,6 +145,8 @@ getTemporality tt
     PossibilityDefinitely -> Nothing
 
     TypeVar _             -> Nothing
+    TypeForall _ _ _      -> Nothing
+    TypeArrow _ _         -> Nothing -- wrap2 go TypeArrow f a
 
  where
   go = getTemporality
@@ -191,6 +193,8 @@ getPossibility tt
     PossibilityDefinitely -> Nothing
 
     TypeVar _             -> Nothing
+    TypeForall _ _ _      -> Nothing
+    TypeArrow _ _         -> Nothing -- wrap2 go TypeArrow f a
 
  where
   go = getPossibility
@@ -228,7 +232,8 @@ getBaseType tt
     PossibilityDefinitely -> Nothing
 
     TypeVar _             -> Just tt
-
+    TypeForall _ _ _      -> Just tt
+    TypeArrow _ _         -> Just tt
 
 -- Temporality and possibility helpers --
 
@@ -257,3 +262,9 @@ wrapN go f ts
        Nothing -> Nothing
        Just tmp' -> f tmp' args
 
+
+anyArrows :: Type n -> Bool
+anyArrows
+ = let go (TypeArrow {}) = Any True
+       go x = foldSourceType go x
+   in getAny . go

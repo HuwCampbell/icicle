@@ -38,7 +38,7 @@ reannotF f fun
 data ResolvedFunction a n =
   ResolvedFunction {
      functionName :: Name n
-   , functionType :: FunctionType n
+   , functionType :: Type n
    , functionDefinition :: Function (Annot a n) n
    } deriving (Eq, Show)
 
@@ -60,26 +60,17 @@ buildResolved :: (IsString n, Hashable n) => a -> BuiltinFun -> Fresh.Fresh n (R
 buildResolved a_fresh builtin = do
   typ
     <- primLookup' (Fun builtin)
-
-  args
-    <- for (functionArguments typ) $ \ty -> do
-         (Annot a_fresh ty [],) <$> Fresh.fresh
-
   let
     name
       = nameOf . NameBase . fromString . show . pretty $ builtin
-    constraints
-      = (a_fresh,) <$> functionConstraints typ
     annot
-      = Annot a_fresh (functionReturn typ) constraints
+      = Annot a_fresh typ []
     prim
       = Prim annot (Fun builtin)
-    exp'
-      = foldl (\ex (a, argName) -> mkApp ex (Var a argName)) prim args
     query'
-      = Query [] exp'
+      = Query [] prim
     definition
-      = Function args query'
+      = Function [] query'
 
   return $
     ResolvedFunction name typ definition

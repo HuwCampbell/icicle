@@ -3,20 +3,29 @@
 -- so each type is tagged with a universe describing the stage.
 --
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE PatternGuards #-}
+{-# LANGUAGE TypeFamilies #-}
 module Icicle.Source.Type.Base (
     Type        (..)
+  , TraverseType (..)
   , typeOfValType
   , valTypeOfType
   , Constraint  (..)
-  , FunctionType(..)
   , Annot (..)
   , annotDiscardConstraints
-  , prettyFun
+  , foldSourceType
+  , mapSourceType
   ) where
+
+import           Control.Lens.Setter    (Identity (..))
+import           Control.Lens.Fold      (foldMapOf)
+import           Control.Lens.Traversal (mapMOf)
 
 import qualified Data.Map as Map
 
@@ -56,9 +65,57 @@ data Type n
  | PossibilityDefinitely
 
  | TypeVar             (Name n)
+ | TypeForall          [Name n] [Constraint n] (Type n)
+ | TypeArrow           (Type n) (Type n)
  deriving (Eq, Ord, Show, Generic)
 
 instance NFData n => NFData (Type n)
+
+class TraverseType a where
+  type N a :: *
+  traverseType :: Applicative f => (Type (N a) -> f (Type (N a))) -> (a -> f a)
+
+instance TraverseType a => TraverseType [a] where
+  type N [a] = N a
+  traverseType f d = traverse (traverseType f) d
+
+instance TraverseType (Type n) where
+  type N (Type n) = n
+  traverseType f t = case t of
+    BoolT        -> pure BoolT
+    TimeT        -> pure TimeT
+    DoubleT      -> pure DoubleT
+    IntT         -> pure IntT
+    StringT      -> pure StringT
+    UnitT        -> pure UnitT
+    ErrorT       -> pure ErrorT
+    ArrayT a     -> ArrayT  <$> f a
+    GroupT k v   -> GroupT  <$> f k <*> f v
+    OptionT a    -> OptionT <$> f a
+    PairT a b    -> PairT   <$> f a <*> f b
+    SumT  a b    -> SumT    <$> f a <*> f b
+    StructT st   -> StructT <$> traverse f st
+
+    Temporality x a         -> Temporality <$> f x <*> f a
+    TemporalityPure         -> pure TemporalityPure
+    TemporalityElement      -> pure TemporalityElement
+    TemporalityAggregate    -> pure TemporalityAggregate
+
+    Possibility p a         -> Possibility <$> f p <*> f a
+    PossibilityPossibly     -> pure PossibilityPossibly
+    PossibilityDefinitely   -> pure PossibilityDefinitely
+
+    TypeVar v               -> pure (TypeVar v)
+    TypeForall ns cs x      -> TypeForall ns <$> traverseType f cs <*> f x
+    TypeArrow a b           -> TypeArrow <$> f a <*> f b
+
+foldSourceType :: Monoid x => (Type n -> x) -> (Type n -> x)
+foldSourceType =
+  foldMapOf traverseType
+
+mapSourceType :: (Type n -> Type n) -> (Type n -> Type n)
+mapSourceType f =
+  runIdentity . mapMOf traverseType (Identity . f)
 
 typeOfValType :: CT.ValType -> Type n
 typeOfValType vt
@@ -109,6 +166,8 @@ valTypeOfType bt
     PossibilityDefinitely   -> Nothing
 
     TypeVar _               -> Nothing
+    TypeForall _ _ _        -> Nothing
+    TypeArrow _ _           -> Nothing
  where
   go = valTypeOfType
 
@@ -126,16 +185,25 @@ data Constraint n
 
 instance NFData n => NFData (Constraint n)
 
-data FunctionType n
- = FunctionType
- { functionForalls      :: [Name n]
- , functionConstraints  :: [Constraint n]
- , functionArguments    :: [Type n]
- , functionReturn       :: Type n
- }
- deriving (Eq, Ord, Show, Generic)
-
-instance NFData n => NFData (FunctionType n)
+instance TraverseType (Constraint n) where
+  type N (Constraint n) = n
+  traverseType f t = case t of
+    CEquals t1 t2
+      -> CEquals <$> f t1 <*> f t2
+    CIsNum t1
+      -> CIsNum <$> f t1
+    CPossibilityOfNum t1 t2
+      -> CPossibilityOfNum <$> f t1 <*> f t2
+    CTemporalityJoin t1 t2 t3
+      -> CTemporalityJoin <$> f t1 <*> f t2 <*> f t3
+    CReturnOfLetTemporalities t1 t2 t3
+      -> CReturnOfLetTemporalities <$> f t1 <*> f t2 <*> f t3
+    CDataOfLatest t1 t2 t3 t4
+      -> CDataOfLatest <$> f t1 <*> f t2 <*> f t3 <*> f t4
+    CPossibilityOfLatest t1 t2 t3
+      -> CPossibilityOfLatest <$> f t1 <*> f t2 <*> f t3
+    CPossibilityJoin t1 t2 t3
+      -> CPossibilityJoin <$> f t1 <*> f t2 <*> f t3
 
 data Annot a n
  = Annot
@@ -185,7 +253,12 @@ instance Pretty n => Pretty (Type n) where
       prettyStructType hcat . fmap (bimap pretty pretty) $ Map.toList fs
     TypeVar v ->
       annotate AnnVariable (pretty v)
-
+    TypeForall _ cs x ->
+      parensWhenArg p $
+        pretty $ PrettyFunType (fmap pretty cs) [] (pretty x)
+    TypeArrow f x ->
+      parensWhenArg p $
+        pretty $ PrettyFunType [] [pretty f] (pretty x)
     Temporality a b ->
       prettyApp hsep p a [b]
     TemporalityPure ->
@@ -234,17 +307,6 @@ instance Pretty n => Pretty (Constraint n) where
     CPossibilityJoin a b c ->
       pretty a <+> prettyPunctuation "=:" <+>
       prettyApp hsep 0 (prettyConstructor "PossibilityJoin") [b, c]
-
-prettyFun :: Pretty n => FunctionType n -> PrettyFunType
-prettyFun fun =
-  PrettyFunType
-    (fmap pretty $ functionConstraints fun)
-    (fmap pretty $ functionArguments fun)
-    (pretty $ functionReturn fun)
-
-instance Pretty n => Pretty (FunctionType n) where
-  pretty =
-    pretty . prettyFun
 
 instance (Pretty n) => Pretty (Annot a n) where
   pretty ann =
